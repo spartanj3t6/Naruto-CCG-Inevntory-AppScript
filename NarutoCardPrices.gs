@@ -113,19 +113,23 @@ function getCardPrice(cardName, setName) {
   }
 
   function searchForPrice(name, targetSet) {
-    const html1 = fetchPage(name, 1);
-    const price1 = findPriceInHtml(html1, name, targetSet);
-    if (price1) return price1;
+  const isZeroPrice = price => price === "$0.00" || price === "$0";
 
-    if (html1.includes("data-name=") || html1.includes('class="price no-stock"')) {
-      try {
-        const html2 = fetchPage(name, 2);
-        const price2 = findPriceInHtml(html2, name, targetSet);
-        if (price2) return price2;
-      } catch(e) {}
-    }
+  const html1 = fetchPage(name, 1);
+  const price1 = findPriceInHtml(html1, name, targetSet);
+  if (price1 && !isZeroPrice(price1)) return price1;
+  if (price1 && isZeroPrice(price1)) return "$0 - Verify";
 
-    return null;
+  if (html1.includes("data-name=") || html1.includes('class="price no-stock"')) {
+    try {
+      const html2 = fetchPage(name, 2);
+      const price2 = findPriceInHtml(html2, name, targetSet);
+      if (price2 && !isZeroPrice(price2)) return price2;
+      if (price2 && isZeroPrice(price2)) return "$0 - Verify";
+    } catch(e) {}
+  }
+
+  return null;
   }
 
   function stripFoil(name) {
@@ -149,7 +153,12 @@ function getCardPrice(cardName, setName) {
     }
     return null;
   }
-
+  // Try stripping double quotes from name
+  const noQuotes = cleanName.replace(/[""\u201C\u201D]/g, '');
+  if (noQuotes !== cleanName) {
+    price = searchWithEditionFallback(noQuotes, targetSet);
+    if (price) { cache.put(cacheKey, price, 21600); return price; }
+  }
   const targetSet = setName ? setName.toString().trim() : null;
   const isSuperRare = cleanName.includes("Super Rare");
   const isStarterSuperRare = cleanName.includes("Super Rare (Starter)");
@@ -157,40 +166,40 @@ function getCardPrice(cardName, setName) {
 
   try {
     // --- Super Rare (Starter) path ---
-    if (isStarterSuperRare) {
-      const asPlainSuperRare = cleanName.replace(/Super Rare \(Starter\)/gi, "Super Rare");
-      let price = searchWithEditionFallback(asPlainSuperRare, targetSet);
-      if (price) { cache.put(cacheKey, price, 21600); return price; }
+  if (isStarterSuperRare) {
+  const asPlainSuperRare = cleanName.replace(/Super Rare \(Starter\)/gi, "Super Rare");
+  const asStarter = cleanName.replace(/Super Rare \(Starter\)/gi, "Starter");
 
-      if (hasFoil) {
-        const asPlainSuperRareNoFoil = stripFoil(asPlainSuperRare);
-        price = searchWithEditionFallback(asPlainSuperRareNoFoil, targetSet);
-        if (price) { cache.put(cacheKey, price, 21600); return price; }
-      }
+  let price = searchWithEditionFallback(asPlainSuperRare, targetSet);
+  if (price) { cache.put(cacheKey, price, 21600); return price; }
 
-      price = searchWithEditionFallback(cleanName, targetSet);
-      if (price) { cache.put(cacheKey, price, 21600); return price; }
+  if (hasFoil) {
+    const asPlainSuperRareNoFoil = stripFoil(asPlainSuperRare);
+    price = searchWithEditionFallback(asPlainSuperRareNoFoil, targetSet);
+    if (price) { cache.put(cacheKey, price, 21600); return price; }
+  }
 
-      if (hasFoil) {
-        const noFoil = stripFoil(cleanName);
-        price = searchWithEditionFallback(noFoil, targetSet);
-        if (price) { cache.put(cacheKey, price, 21600); return price; }
-      }
+  // Try "Starter" as the rarity
+  price = searchWithEditionFallback(asStarter, targetSet);
+  if (price) { cache.put(cacheKey, price, 21600); return price; }
 
-      return "Not found";
-    }
+  if (hasFoil) {
+    const asStarterNoFoil = stripFoil(asStarter);
+    price = searchWithEditionFallback(asStarterNoFoil, targetSet);
+    if (price) { cache.put(cacheKey, price, 21600); return price; }
+  }
 
-    // --- Regular Super Rare with foil path ---
-    if (isSuperRare && hasFoil) {
-      let price = searchWithEditionFallback(cleanName, targetSet);
-      if (price) { cache.put(cacheKey, price, 21600); return price; }
+  price = searchWithEditionFallback(cleanName, targetSet);
+  if (price) { cache.put(cacheKey, price, 21600); return price; }
 
-      const noFoil = stripFoil(cleanName);
-      price = searchWithEditionFallback(noFoil, targetSet);
-      if (price) { cache.put(cacheKey, price, 21600); return price; }
+  if (hasFoil) {
+    const noFoil = stripFoil(cleanName);
+    price = searchWithEditionFallback(noFoil, targetSet);
+    if (price) { cache.put(cacheKey, price, 21600); return price; }
+  }
 
-      return "Not found";
-    }
+  return "Not found";
+}
 
     // --- Standard path ---
     let price = searchWithEditionFallback(cleanName, targetSet);
@@ -340,6 +349,11 @@ function updateAllPrices() {
     try {
       const price = getCardPrice(cardName, setName);
       priceCell.setValue(price);
+        if (price === "$0 - Verify") {
+          priceCell.setBackground("#FFD700");
+        } else {
+          priceCell.setBackground(null);
+        }
       fetchCount++;
     } catch (e) {
       priceCell.setValue("Error");
@@ -411,6 +425,11 @@ function refreshAllPrices() {
     try {
       const price = getCardPrice(cardName, setName);
       priceCell.setValue(price);
+        if (price === "$0 - Verify") {
+          priceCell.setBackground("#FFD700");
+        } else {
+          priceCell.setBackground(null);
+        }
       fetchCount++;
     } catch (e) {
       priceCell.setValue("Error");
@@ -458,6 +477,11 @@ function updateSelectedRows() {
     try {
       const price = getCardPrice(cardName, setName);
       priceCell.setValue(price);
+        if (price === "$0 - Verify") {
+          priceCell.setBackground("#FFD700");
+        } else {
+          priceCell.setBackground(null);
+        }
     } catch (e) {
       priceCell.setValue("Error");
     }
@@ -484,5 +508,12 @@ function updateSelectedRow() {
 
   priceCell.setValue("Loading...");
   SpreadsheetApp.flush();
-  priceCell.setValue(getCardPrice(cardName, setName));
+
+  const price = getCardPrice(cardName, setName);
+  priceCell.setValue(price);
+  if (price === "$0 - Verify") {
+    priceCell.setBackground("#FFD700");
+  } else {
+    priceCell.setBackground(null);
+  }
 }
