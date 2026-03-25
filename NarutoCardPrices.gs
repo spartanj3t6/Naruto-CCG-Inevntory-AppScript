@@ -15,7 +15,7 @@ function getCardPrice(cardName, setName) {
     "muteHttpExceptions": true
   };
 
-  const normalize = str => str.toLowerCase().replace(/\s*-\s*/g, "-");
+  const normalize = str => str.toLowerCase().replace(/\s*-\s*/g, "-").replace(/["\u201C\u201D\u201E\u201F]/g, "");
   const normalizeSet = str => str ? str.toLowerCase().trim() : "";
 
   function decodeEntities(str) {
@@ -60,76 +60,104 @@ function getCardPrice(cardName, setName) {
   );
 
   function fetchPage(name, page) {
-    const url = "https://goatcardsshop.crystalcommerce.com/products/search?q=%22" + encodeURIComponent(name) + "%22&page=" + page;
-    return UrlFetchApp.fetch(url, options).getContentText();
+  const searchName = name.replace(/["\u201C\u201D]/g, "");
+  const url = "https://goatcardsshop.crystalcommerce.com/products/search?q=%22" + encodeURIComponent(searchName) + "%22&page=" + page;
+  return UrlFetchApp.fetch(url, options).getContentText();
   }
 
   function findPriceInHtml(html, name, targetSet) {
-    const conditionPriority = ["NM/LP", "Played", "Damaged"];
+      const conditionPriority = ["NM/LP", "Played", "Damaged"];
 
-    // --- Primary: in-stock cards with data attributes ---
-    const formRegex = /data-name="([^"]+)"[^>]*data-price="(\$[\d.]+)"[^>]*data-category="([^"]+)"[^>]*data-variant="([^"]+)"/gi;
-    let match;
-    const found = {};
+      const formRegex = /data-name="((?:&quot;|[^"])+)"[^>]*data-price="(\$[\d.]+)"[^>]*data-category="([^"]+)"[^>]*data-variant="([^"]+)"/gi;
+      let match;
+      const found = {};
 
-    while ((match = formRegex.exec(html)) !== null) {
-      const siteName = normalizeApostrophes(decodeEntities(match[1].trim()));
-      const price = match[2];
-      const category = normalizeApostrophes(decodeEntities(match[3].trim()));
-      const variant = match[4].trim();
+      while ((match = formRegex.exec(html)) !== null) {
+        const siteName = normalizeApostrophes(decodeEntities(match[1].trim()));
+        const price = match[2];
+        const category = normalizeApostrophes(decodeEntities(match[3].trim()));
+        const variant = match[4].trim();
 
-      if (normalize(siteName) === normalize(name)) {
-        if (!targetSet || normalizeSet(category) === normalizeSet(targetSet)) {
-          if (!found[variant]) found[variant] = price;
+        if (normalize(siteName) === normalize(name)) {
+          if (!targetSet || normalizeSet(category) === normalizeSet(targetSet)) {
+            if (!found[variant]) found[variant] = price;
+          }
         }
       }
-    }
 
-    for (const condition of conditionPriority) {
-      if (found[condition]) return found[condition];
-    }
+      for (const condition of conditionPriority) {
+        if (found[condition]) return found[condition];
+      }
 
-    // --- Fallback: fully out-of-stock cards with no data attributes ---
-    const productBlockRegex = /itemprop="name"[^>]*title="([^"]+)"/gi;
-    let blockMatch;
+      const productBlockRegex = /itemprop="name"[^>]*title="([^"]+)"/gi;
+      let blockMatch;
 
-    while ((blockMatch = productBlockRegex.exec(html)) !== null) {
-      const blockName = normalizeApostrophes(decodeEntities(blockMatch[1].trim()));
+      while ((blockMatch = productBlockRegex.exec(html)) !== null) {
+        const blockName = normalizeApostrophes(decodeEntities(blockMatch[1].trim()));
 
-      if (normalize(blockName) !== normalize(name)) continue;
+        if (normalize(blockName) !== normalize(name)) continue;
 
-      const htmlAfter = html.substring(blockMatch.index);
+        const htmlAfter = html.substring(blockMatch.index);
 
-      const categoryMatch = htmlAfter.match(/<span[^>]*class="category"[^>]*>([^<]+)<\/span>/i);
-      const blockCategory = categoryMatch ? normalizeApostrophes(decodeEntities(categoryMatch[1].trim())) : "";
+        const categoryMatch = htmlAfter.match(/<span[^>]*class="category"[^>]*>([^<]+)<\/span>/i);
+        const blockCategory = categoryMatch ? normalizeApostrophes(decodeEntities(categoryMatch[1].trim())) : "";
 
-      if (targetSet && normalizeSet(blockCategory) !== normalizeSet(targetSet)) continue;
+        if (targetSet && normalizeSet(blockCategory) !== normalizeSet(targetSet)) continue;
 
-      const noStockMatch = htmlAfter.match(/<span[^>]*class="price no-stock"[^>]*>\s*\$?([\d.]+)/i);
-      if (noStockMatch) return "$" + noStockMatch[1];
-    }
+        const noStockMatch = htmlAfter.match(/<span[^>]*class="price no-stock"[^>]*>\s*\$?([\d.]+)/i);
+        if (noStockMatch) return "$" + noStockMatch[1];
+      }
 
-    return null;
+      // --- Last resort: match by h4 text content for cards with quotes in name ---
+      const h4Regex = /<h4[^>]*itemprop="name"[^>]*>(.*?)<\/h4>/gi;
+      let h4Match;
+      while ((h4Match = h4Regex.exec(html)) !== null) {
+        const h4Name = normalizeApostrophes(decodeEntities(h4Match[1].trim()));
+        if (normalize(h4Name) !== normalize(name)) continue;
+
+        const htmlAfter = html.substring(h4Match.index);
+
+        const categoryMatch = htmlAfter.match(/<span[^>]*class="category"[^>]*>([^<]+)<\/span>/i);
+        const blockCategory = categoryMatch ? normalizeApostrophes(decodeEntities(categoryMatch[1].trim())) : "";
+        if (targetSet && normalizeSet(blockCategory) !== normalizeSet(targetSet)) continue;
+
+        const htmlChunk = html.substring(h4Match.index, h4Match.index + 3000);
+        const nearbyFormRegex = /data-price="(\$[\d.]+)"[^>]*data-variant="([^"]+)"/gi;
+        const nearbyFound = {};
+        let nfMatch;
+        while ((nfMatch = nearbyFormRegex.exec(htmlChunk)) !== null) {
+          const variant = nfMatch[2].trim();
+          if (!nearbyFound[variant]) nearbyFound[variant] = nfMatch[1];
+        }
+        for (const condition of conditionPriority) {
+          if (nearbyFound[condition]) return nearbyFound[condition];
+        }
+
+        const noStockMatch = htmlAfter.match(/<span[^>]*class="price no-stock"[^>]*>\s*\$?([\d.]+)/i);
+        if (noStockMatch) return "$" + noStockMatch[1];
+      }
+
+      return null;
   }
 
   function searchForPrice(name, targetSet) {
-  const isZeroPrice = price => price === "$0.00" || price === "$0";
+    const isZeroPrice = price => price === "$0.00" || price === "$0";
 
-  const html1 = fetchPage(name, 1);
-  const price1 = findPriceInHtml(html1, name, targetSet);
-  if (price1 && !isZeroPrice(price1)) return price1;
-  if (price1 && isZeroPrice(price1)) return "$0 - Verify";
+    const html1 = fetchPage(name, 1);
+    const price1 = findPriceInHtml(html1, name, targetSet);
+    if (price1 && !isZeroPrice(price1)) return price1;
+    if (price1 && isZeroPrice(price1)) return "$0 - Verify";
 
-  if (html1.includes("data-name=") || html1.includes('class="price no-stock"')) {
-    try {
-      const html2 = fetchPage(name, 2);
-      const price2 = findPriceInHtml(html2, name, targetSet);
-      if (price2 && !isZeroPrice(price2)) return price2;
-      if (price2 && isZeroPrice(price2)) return "$0 - Verify";
-    } catch(e) {}
-  }
+    if (html1.includes("data-name=") || html1.includes('class="price no-stock"')) {
+      try {
+        const html2 = fetchPage(name, 2);
+        const price2 = findPriceInHtml(html2, name, targetSet);
+        if (price2 && !isZeroPrice(price2)) return price2;
+        if (price2 && isZeroPrice(price2)) return "$0 - Verify";
+      } catch(e) {}
+    }
 
-  return null;
+    return null;
   }
 
   function stripFoil(name) {
@@ -153,12 +181,7 @@ function getCardPrice(cardName, setName) {
     }
     return null;
   }
-  // Try stripping double quotes from name
-  const noQuotes = cleanName.replace(/[""\u201C\u201D]/g, '');
-  if (noQuotes !== cleanName) {
-    price = searchWithEditionFallback(noQuotes, targetSet);
-    if (price) { cache.put(cacheKey, price, 21600); return price; }
-  }
+
   const targetSet = setName ? setName.toString().trim() : null;
   const isSuperRare = cleanName.includes("Super Rare");
   const isStarterSuperRare = cleanName.includes("Super Rare (Starter)");
@@ -166,44 +189,73 @@ function getCardPrice(cardName, setName) {
 
   try {
     // --- Super Rare (Starter) path ---
-  if (isStarterSuperRare) {
-  const asPlainSuperRare = cleanName.replace(/Super Rare \(Starter\)/gi, "Super Rare");
-  const asStarter = cleanName.replace(/Super Rare \(Starter\)/gi, "Starter");
+    if (isStarterSuperRare) {
+      const asPlainSuperRare = cleanName.replace(/Super Rare \(Starter\)/gi, "Super Rare");
+      const asStarter = cleanName.replace(/Super Rare \(Starter\)/gi, "Starter");
 
-  let price = searchWithEditionFallback(asPlainSuperRare, targetSet);
-  if (price) { cache.put(cacheKey, price, 21600); return price; }
+      let price = searchWithEditionFallback(asPlainSuperRare, targetSet);
+      if (price) { cache.put(cacheKey, price, 21600); return price; }
 
-  if (hasFoil) {
-    const asPlainSuperRareNoFoil = stripFoil(asPlainSuperRare);
-    price = searchWithEditionFallback(asPlainSuperRareNoFoil, targetSet);
-    if (price) { cache.put(cacheKey, price, 21600); return price; }
-  }
+      if (hasFoil) {
+        const asPlainSuperRareNoFoil = stripFoil(asPlainSuperRare);
+        price = searchWithEditionFallback(asPlainSuperRareNoFoil, targetSet);
+        if (price) { cache.put(cacheKey, price, 21600); return price; }
+      }
 
-  // Try "Starter" as the rarity
-  price = searchWithEditionFallback(asStarter, targetSet);
-  if (price) { cache.put(cacheKey, price, 21600); return price; }
+      price = searchWithEditionFallback(asStarter, targetSet);
+      if (price) { cache.put(cacheKey, price, 21600); return price; }
 
-  if (hasFoil) {
-    const asStarterNoFoil = stripFoil(asStarter);
-    price = searchWithEditionFallback(asStarterNoFoil, targetSet);
-    if (price) { cache.put(cacheKey, price, 21600); return price; }
-  }
+      if (hasFoil) {
+        const asStarterNoFoil = stripFoil(asStarter);
+        price = searchWithEditionFallback(asStarterNoFoil, targetSet);
+        if (price) { cache.put(cacheKey, price, 21600); return price; }
+      }
 
-  price = searchWithEditionFallback(cleanName, targetSet);
-  if (price) { cache.put(cacheKey, price, 21600); return price; }
+      price = searchWithEditionFallback(cleanName, targetSet);
+      if (price) { cache.put(cacheKey, price, 21600); return price; }
 
-  if (hasFoil) {
-    const noFoil = stripFoil(cleanName);
-    price = searchWithEditionFallback(noFoil, targetSet);
-    if (price) { cache.put(cacheKey, price, 21600); return price; }
-  }
+      if (hasFoil) {
+        const noFoil = stripFoil(cleanName);
+        price = searchWithEditionFallback(noFoil, targetSet);
+        if (price) { cache.put(cacheKey, price, 21600); return price; }
+      }
 
-  return "Not found";
-}
+      return "Not found";
+    }
+
+    // --- Regular Super Rare with foil path ---
+    if (isSuperRare && hasFoil) {
+      let price = searchWithEditionFallback(cleanName, targetSet);
+      if (price) { cache.put(cacheKey, price, 21600); return price; }
+
+      const noFoil = stripFoil(cleanName);
+      price = searchWithEditionFallback(noFoil, targetSet);
+      if (price) { cache.put(cacheKey, price, 21600); return price; }
+
+      return "Not found";
+    }
 
     // --- Standard path ---
+
+    // --- Invasion fallback: try without rarity in the key (run first for Invasion set) ---
+    if (targetSet && targetSet.toLowerCase() === "invasion") {
+      const invasionParts = cleanName.split(" - ");
+      if (invasionParts.length >= 3) {
+        const invasionName = invasionParts[0] + " - " + invasionParts[1] + " -  - " + invasionParts.slice(3).join(" - ");
+        let price = searchWithEditionFallback(invasionName, targetSet);
+        if (price) { cache.put(cacheKey, price, 21600); return price; }
+      }
+    }
+
     let price = searchWithEditionFallback(cleanName, targetSet);
     if (price) { cache.put(cacheKey, price, 21600); return price; }
+
+    // Try stripping double quotes from name
+    const noQuotes = cleanName.replace(/["\u201C\u201D]/g, '');
+    if (noQuotes !== cleanName) {
+      price = searchWithEditionFallback(noQuotes, targetSet);
+      if (price) { cache.put(cacheKey, price, 21600); return price; }
+    }
 
     const rarityFallback = buildRarityFallback(cleanName);
     if (rarityFallback) {
@@ -349,11 +401,11 @@ function updateAllPrices() {
     try {
       const price = getCardPrice(cardName, setName);
       priceCell.setValue(price);
-        if (price === "$0 - Verify") {
-          priceCell.setBackground("#FFD700");
-        } else {
-          priceCell.setBackground(null);
-        }
+      if (price === "$0 - Verify") {
+        priceCell.setBackground("#FFD700");
+      } else {
+        priceCell.setBackground(null);
+      }
       fetchCount++;
     } catch (e) {
       priceCell.setValue("Error");
@@ -425,11 +477,11 @@ function refreshAllPrices() {
     try {
       const price = getCardPrice(cardName, setName);
       priceCell.setValue(price);
-        if (price === "$0 - Verify") {
-          priceCell.setBackground("#FFD700");
-        } else {
-          priceCell.setBackground(null);
-        }
+      if (price === "$0 - Verify") {
+        priceCell.setBackground("#FFD700");
+      } else {
+        priceCell.setBackground(null);
+      }
       fetchCount++;
     } catch (e) {
       priceCell.setValue("Error");
@@ -477,11 +529,11 @@ function updateSelectedRows() {
     try {
       const price = getCardPrice(cardName, setName);
       priceCell.setValue(price);
-        if (price === "$0 - Verify") {
-          priceCell.setBackground("#FFD700");
-        } else {
-          priceCell.setBackground(null);
-        }
+      if (price === "$0 - Verify") {
+        priceCell.setBackground("#FFD700");
+      } else {
+        priceCell.setBackground(null);
+      }
     } catch (e) {
       priceCell.setValue("Error");
     }
