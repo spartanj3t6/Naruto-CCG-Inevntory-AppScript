@@ -56,6 +56,7 @@ function getCardPrice(cardName, setName) {
     cardName.toString()
       .replace(/ - Gold Letters/gi, "").replace(/Gold Letters - /gi, "")
       .replace(/ - Red Letters/gi, "").replace(/Red Letters - /gi, "")
+      .replace(/ - Rainbow Letters/gi, "").replace(/Rainbow Letters - /gi, "")
       .trim()
   );
 
@@ -292,6 +293,15 @@ function getCardPrice(cardName, setName) {
 
         const starterNoEdition = starterName.replace(/ - Unlimited Edition/gi, "").trim();
         price = searchWithEditionFallback(starterNoEdition, targetSet);
+        if (price) { cache.put(cacheKey, price, 21600); return price; }
+
+        // NEW: try "Starter Deck" as rarity label explicitly
+        const starterDeckName = starterParts.map((part, idx) => idx === 2 ? "Starter Deck" : part).join(" - ");
+        price = searchWithEditionFallback(starterDeckName, targetSet);
+        if (price) { cache.put(cacheKey, price, 21600); return price; }
+
+        const starterDeckNoEdition = starterDeckName.replace(/ - Unlimited Edition/gi, "").trim();
+        price = searchWithEditionFallback(starterDeckNoEdition, targetSet);
         if (price) { cache.put(cacheKey, price, 21600); return price; }
       }
     }
